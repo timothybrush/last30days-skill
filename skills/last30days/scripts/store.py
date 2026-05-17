@@ -14,7 +14,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -519,7 +519,7 @@ def get_daily_cost(date: Optional[str] = None) -> float:
     conn = _connect()
     try:
         if not date:
-            date = datetime.now().strftime("%Y-%m-%d")
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         row = conn.execute(
             """SELECT COALESCE(SUM(token_cost), 0) as total
                FROM research_runs
@@ -575,7 +575,7 @@ def get_stats() -> Dict[str, Any]:
         topic_count = conn.execute("SELECT COUNT(*) FROM topics WHERE enabled = 1").fetchone()[0]
         finding_count = conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
 
-        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         runs_7d = conn.execute(
             "SELECT COUNT(*) FROM research_runs WHERE run_date >= ?", (week_ago,)
         ).fetchone()[0]
@@ -621,7 +621,7 @@ def get_trending(days: int = 7) -> List[Dict[str, Any]]:
     """Get topics ranked by recent finding activity."""
     conn = _connect()
     try:
-        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
         rows = conn.execute(
             """SELECT t.name, t.id,
                       COUNT(f.id) as new_findings,
@@ -673,27 +673,31 @@ def findings_from_report(
     limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Convert report into persisted findings.
-    
+
     Uses ranked candidates (post-rerank) when available for quality scores and explanations.
     Supplements with raw items from items_by_source for HN/PM that didn't rank highly
-    but are valuable for watchlist persistence.
+    but are valuable for watchlist persistence. When ranked_candidates is empty
+    (degraded path — rerank failed or was skipped), falls back to supplementing
+    all sources from items_by_source so findings aren't silently dropped.
     """
     findings = []
     seen_urls = set()
-    
-    # Phase 1: Process ranked candidates (high-quality data with explanations and corroboration)
+
     for candidate in report.ranked_candidates:
-        finding = finding_from_candidate(candidate)
-        findings.append(finding)
+        findings.append(finding_from_candidate(candidate))
         seen_urls.add(candidate.url)
-    
-    # Phase 2: Add HN/PM items not already captured in ranked candidates
-    for source_name in ["hackernews", "polymarket"]:
+
+    supplement_sources = (
+        list(report.items_by_source)
+        if not report.ranked_candidates
+        else ["hackernews", "polymarket"]
+    )
+    for source_name in supplement_sources:
         if source_name not in report.items_by_source:
             continue
         for item in report.items_by_source[source_name]:
             if item.url in seen_urls:
-                continue  # Already captured with rich data
+                continue
             findings.append({
                 "source": source_name,
                 "source_url": item.url,
@@ -705,8 +709,7 @@ def findings_from_report(
                 "relevance_score": item.local_relevance or 0.5,
             })
             seen_urls.add(item.url)
-    
-    # Apply global limit after collecting all findings (fix: was per-source, now global)
+
     return findings[:limit] if limit is not None else findings
 
 
@@ -722,9 +725,10 @@ def _cli_query(args):
 
     since = None
     if args.since:
-        # Parse duration like "7d", "30d"
+        # Parse duration like "7d", "30d". Use UTC to match SQLite's
+        # datetime('now') which writes first_seen in UTC.
         days = int(args.since.rstrip("d"))
-        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
 
     findings = get_new_findings(topic["id"], since)
     print(json.dumps({"topic": topic["name"], "findings": findings, "count": len(findings)}, default=str))

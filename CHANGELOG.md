@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Scheduled OSV-Scanner vulnerability-drift workflow scans repository lockfiles weekly and uploads SARIF results to GitHub code scanning, catching newly disclosed CVEs in the dependency tree even between PRs ([#571](https://github.com/mvanhorn/last30days-skill/issues/571))
+- `LAST30DAYS_REDDIT_BACKEND=scrapecreators` makes ScrapeCreators the primary Reddit backend with the public path as fallback. Users with a ScrapeCreators key who were getting shallow public data will now get full nested comment trees by setting this flag ([#589](https://github.com/mvanhorn/last30days-skill/issues/589))
 
 ## [3.8.0] - 2026-06-21
 

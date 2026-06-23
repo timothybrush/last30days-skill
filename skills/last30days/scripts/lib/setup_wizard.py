@@ -169,6 +169,22 @@ def _digg_off_path_binary() -> Optional[str]:
     return None
 
 
+def _digg_bin_dir_hint(digg_path: str) -> str:
+    """Return a copy-pasteable PATH directory for the given binary path."""
+    parent = os.path.dirname(os.path.expanduser(digg_path))
+    if os.name == "nt":
+        # Windows PATH edits use absolute dirs; $HOME is a Unix shell convention.
+        return parent
+    home = str(Path.home())
+    if parent == home:
+        return "$HOME"
+    prefix = home + os.sep
+    if parent.startswith(prefix):
+        rel = parent[len(prefix):].replace(os.sep, "/")
+        return f"$HOME/{rel}" if rel else "$HOME"
+    return parent
+
+
 def _install_digg_cli() -> Tuple[bool, str, str, str]:
     """Best-effort install of the digg-pp-cli binary.
 
@@ -355,16 +371,19 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
         lines.append("  - Digg CLI already installed (AI-news clusters active)")
     elif digg_action == "installed_off_path":
         digg_path = results.get("digg_path", "")
-        # Tell the user to add the dir where the binary was ACTUALLY found
-        # (probed across ~/.local/bin, $GOPATH/bin, ~/go/bin, Windows). Hardcoding
-        # ~/.local/bin would misdirect a user whose binary lives in ~/go/bin.
-        bin_dir = str(Path(digg_path).parent) if digg_path else "$HOME/.local/bin"
-        shown_path = digg_path or "$HOME/.local/bin/digg-pp-cli"
-        lines.append(
-            f"  - Digg CLI found at {shown_path} but not on PATH — add "
-            f"{bin_dir} to PATH and restart your agent session/gateway "
-            "for Digg to activate"
-        )
+        if digg_path:
+            bin_dir = _digg_bin_dir_hint(digg_path)
+            lines.append(
+                f"  - Digg CLI found at {digg_path} but not on PATH — add "
+                f"{bin_dir} to PATH and restart your agent session/gateway "
+                "for Digg to activate"
+            )
+        else:
+            lines.append(
+                "  - Digg CLI is installed but not on PATH — add its install "
+                "directory to PATH and restart your agent session/gateway for "
+                "Digg to activate"
+            )
     elif digg_action == "install_failed":
         lines.append(f"  - Digg CLI install failed — run `{DIGG_INSTALL_CMD}` manually")
     elif digg_action == "no_npx":

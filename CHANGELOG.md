@@ -7,7 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-06-21
+
 ### Added
+
+- **Single X source with backend failover.** X is now one source backed by an ordered chain of interchangeable backends (xai, bird, xurl, xquik) with runtime failover, rather than separate sources. The key-based xquik backend reaches parity with bird, gaining the X-quality ranking and FROM/ABOUT handle lanes, so hosts that cannot supply browser cookies (OpenClaw, CI/cron, headless harnesses) get real X coverage from an xquik key alone. Handle lanes run via the first handle-capable backend in the chain even when a non-capable backend (xai/xurl) is primary. (#622)
+
+## [3.7.1] - 2026-06-21
+
+### Fixed
+
+- GitHub repo stars are no longer mislabeled as "reactions" in the report footer. Repo cards use a distinct `stars` engagement key, velocity cards use `merged_prs`, and genuine issue/PR reaction counts keep their own `reactions` key. (#645, closes #642)
+- Hacker News returned zero stories on every run: the Algolia query sent `points>2`, which the HN index no longer accepts as a filterable attribute, so every request 400'd. Dropped the server-side `points` filter; low-engagement demotion still happens at parse time. (#639)
+- Polymarket surfaced off-topic markets and rendered a mangled footer. The relevance filter was fed the per-subquery string instead of the stable topic, and market labels were truncated mid-article into fragments like "an Anthropic Claude model score at: an 19%". Now filters on the stable topic and cleans the labels. (#640)
+
+## [3.7.0] - 2026-06-20
+
+### Added
+
+- **Direct Perplexity API support.** When `PERPLEXITY_API_KEY` is set it is preferred over OpenRouter for the Perplexity source, unlocking first-party Search API results and async Deep Research. Adds `LAST30DAYS_PERPLEXITY_MODE=sonar|search|both` plus model, search-context, domain/language/country, recency, and reasoning-effort knobs. OpenRouter stays the Sonar compatibility fallback when no direct key is set. Async Deep Research preserves request id, status, idempotency key, poll count, lifecycle timestamps, and failure metadata in raw artifacts. (#629, by @sk-holmes)
+
+### Changed
+
+- `check-config.sh` now parses env files in pure bash (no `sed` / `tr`), which also fixes the YouTube-availability hint breaking in minimal environments that lack those tools. (#629)
+
+## [3.6.1] - 2026-06-20
+
+### Added
+
+- **ScrapeCreators transcript fallback.** When `SCRAPECREATORS_API_KEY` is set, YouTube transcripts fall back to the ScrapeCreators transcript endpoint after the keyless yt-dlp cascade fails (fetched server-side, so no 429 / cookies / PO tokens). yt-dlp stays primary and a credit is only spent on a genuine failure, never on success and never on a video proven to have no captions. With a key, yt-dlp also fails over fast (one short-timeout attempt) so a 429 hands off to ScrapeCreators in roughly 17s instead of roughly 90s. (#637, idea from #595)
+- **YouTube comments default-on.** Comment enrichment now activates whenever a ScrapeCreators key is present (bounded to the top ~3 videos by engagement, ~3 credits per run) instead of requiring `INCLUDE_SOURCES=youtube_comments`. Suppress with `EXCLUDE_SOURCES=youtube_comments`. TikTok/Instagram comments remain `INCLUDE_SOURCES` opt-ins. (#637)
+
+### Fixed
+
+- **Salvage partial YouTube transcripts on non-zero yt-dlp exit.** With the default `en,es,pt` languages an English video wrote `en.vtt` then 429'd on `es`/`pt`, and the already-written transcript was discarded and retried back into the rate limit. Any VTT on disk is now read before the failure is classified, which fixes the dominant `0/N transcripts` case. (#636)
+- **Windows transcript crash on subprocess timeout.** Guarded the SIGKILL escalation path in `run_with_timeout` against `os.killpg` / `os.getpgid` raising `AttributeError` on Windows (they are POSIX-only), mirroring the primary path's guard. (#638, reported in #588)
+
+## [3.6.0] - 2026-06-18
+
+### Added
+
+- **First-party X posts are no longer buried.** A post authored by one of the run's resolved handles (`--x-handle`, `--x-related`, the GitHub user) is now treated as first-class evidence: it is exempt from the entity-miss demotion (a post never repeats its own author's name, so the body-text grounding check used to zero out the subject's own highest-signal posts) and gets a small authorship credit. Third-party collision-noise suppression is unchanged.
+- **Engagement rescue for on-topic X posts.** A high-engagement X post that is first-party or entity-grounded gets a `final_score` floor scaled by its engagement percentile within the run's X pool, so a viral on-topic post can't sit at ~0. Off-topic name-collision posts are explicitly excluded.
+- **First-party interaction signal.** A first-party post directed at another account (a reply / leading @mention) is floated into the visible band regardless of like-count and tagged `interaction:→@handle` in the EVIDENCE block, so the synthesis reads it as a relationship signal rather than low-engagement noise. New **LAW 10** in SKILL.md teaches the model to surface first-party posts and read the interaction tag.
+
+### Changed
+
+- The X FROM lane (the subject's own timeline) now pulls up to 8 posts per handle (was 3); the about/related lanes stay modest.
+
+## [3.5.0] - 2026-06-18
+
+### Added
+
+- **X surfaces tweets FROM and ABOUT a person, both engagement-weighted.** The handle search now pulls the person's real timeline (`from:handle since:`, topic used for ranking only — never AND'd into the query, which previously matched only tweets where they wrote their own name and returned ~0), and a new mention lane (`@handle since:`) surfaces what others say to/about them, excluding their own tweets and deduping against the FROM lane ([#610](https://github.com/mvanhorn/last30days-skill/pull/610)).
+- **`## Top Community Comments` block.** The engine now surfaces vote-ranked community comments across all candidates (not just the top-cluster representatives), per-platform-normalized, into the EVIDENCE-for-synthesis block, so the funniest/sharpest crowd reactions reach the synthesizing model even when no LLM fun-scorer is available. Paired with a new SKILL.md **LAW 9** that requires weaving ≥2 verbatim attributed comments, copying URLs verbatim, and never narrating the tooling in the deliverable ([#608](https://github.com/mvanhorn/last30days-skill/pull/608)).
+
+### Fixed
+
+- **`--diagnose` honesty.** X status now reflects a real 1-tweet probe (downgrades from green when X is effectively dead; fail-open on a transient timeout) and reports the true auth lane (browser / env / keychain) instead of a hardcoded `env AUTH_TOKEN`. Handle/mention searches log query + result count on success, not only on failure ([#609](https://github.com/mvanhorn/last30days-skill/pull/609)).
+- **X column de-pollution.** The last-chance keyword retry no longer collapses a multi-word subquery to a bare generic token (e.g. `compound`); it keeps an entity anchor ([#607](https://github.com/mvanhorn/last30days-skill/pull/607)).
+- **Mandatory person-aware subquery disambiguation.** Collision-prone person names (Kevin Rose vs Kevin Warsh, Lan Xuezhao vs Lanzhou) must anchor every subquery with the resolved company/role/domain context ([#611](https://github.com/mvanhorn/last30days-skill/pull/611)).
+
+## [3.4.0] - 2026-06-18
+
+### Added
+
+- **Crowd-vote weighting in the fun judge (Best Takes).** The fun judge now factors how many upvotes/likes each top comment earned. Comment vote counts are fed into the LLM prompt (as traction, not funniness), and Best-Takes selection ranks by an effective score — `fun_score` plus a bounded, per-platform-normalized, relevance-confidence-scaled crowd nudge — so genuinely funny, crowd-loved, on-topic comments surface while off-topic virality and high-voted-but-unfunny rants are excluded. `FUN_LEVEL=medium` stays the default and applies the signal as a meaningful factor ([#592](https://github.com/mvanhorn/last30days-skill/pull/592)).
+- **Digg added to first-run setup.** The free, keyless `digg-pp-cli` is now auto-installed during the first-run wizard (best-effort via the Printing Press installer, with a recommend-only fallback), so the already-built Digg AI-news source activates automatically for new users instead of silently never appearing ([#590](https://github.com/mvanhorn/last30days-skill/pull/590)).
 
 - **`LAST30DAYS_YOUTUBE_SSH_HOST` transcript routing** — yt-dlp transcript fetch runs on the remote SSH host via a mktemp + cat pipeline ([#422](https://github.com/mvanhorn/last30days-skill/pull/422)).
 - Browser-cookie auth for X/Twitter now covers the full Chromium family on macOS - Brave, Microsoft Edge, Vivaldi, Opera, Arc, and Chromium - alongside the existing Chrome, Firefox, and Safari. They all share Chrome's v10 AES-128-CBC decryption, differing only in profile path and Keychain service name, so they run through one shared decryption core. The profile finder probes both the modern `Default/Network/Cookies` layout (Chromium >= 96) and the legacy flat `Default/Cookies`, and Chrome now resolves through that same finder so it picks up the modern layout too. Set `FROM_BROWSER=auto` to try every browser, or `FROM_BROWSER=<name>` (e.g. `brave`, `edge`, `arc`) to target one. Verified end-to-end on real Brave and Edge installs ([#572](https://github.com/mvanhorn/last30days-skill/pull/572)).

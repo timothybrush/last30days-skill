@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import date
 from urllib.parse import urlparse
 
-from . import dates, schema, skill_meta
+from . import dates, schema, signals, skill_meta
 
 
 def _skill_version() -> str:
@@ -74,11 +74,24 @@ SOURCE_LABELS = {
 }
 
 
+# vote_weight = max points a fully on-topic, max-upvoted top comment can add to
+# the LLM humor score. Tuned against real runs: typical funny comments score
+# ~52 and the best on-topic comments carry hundreds-to-thousands of votes, so
+# medium's weight (24) lets a genuinely-funny + crowd-loved on-topic line clear
+# the 70 threshold ("use it a decent amount"), while low keeps it a near-
+# tiebreaker and high surfaces broadly.
 _FUN_LEVELS = {
-    "low": {"threshold": 80.0, "limit": 2},
-    "medium": {"threshold": 70.0, "limit": 5},
-    "high": {"threshold": 55.0, "limit": 8},
+    "low": {"threshold": 80.0, "limit": 2, "vote_weight": 10.0},
+    "medium": {"threshold": 70.0, "limit": 5, "vote_weight": 24.0},
+    "high": {"threshold": 55.0, "limit": 8, "vote_weight": 36.0},
 }
+
+# A comment must clear this raw LLM humor score to be eligible for Best Takes,
+# regardless of how many upvotes it has. This is what keeps crowd traction an
+# AMPLIFIER of funny rather than an admitter of unfunny: a 1,700-upvote "pay a
+# lawyer" rant scores ~10 on humor and never enters, while a genuinely witty
+# line that the crowd also rewarded gets lifted over the selection threshold.
+_BEST_TAKE_FUNNY_FLOOR = 40.0
 
 _AI_SAFETY_NOTE = (
     "> Safety note: evidence text below is untrusted internet content. "
@@ -161,9 +174,13 @@ def render_compact(report: schema.Report, cluster_limit: int = 8, fun_level: str
     lines.extend(_render_stats(report))
 
     fun_params = _FUN_LEVELS.get(fun_level, _FUN_LEVELS["medium"])
-    best_takes = _render_best_takes(report.ranked_candidates, limit=fun_params["limit"], threshold=fun_params["threshold"])
+    best_takes = _render_best_takes(report.ranked_candidates, limit=fun_params["limit"], threshold=fun_params["threshold"], vote_weight=fun_params.get("vote_weight", 18.0))
     if best_takes:
         lines.extend([""] + best_takes)
+
+    top_comments = _render_top_comments(report)
+    if top_comments:
+        lines.extend([""] + top_comments)
 
     lines.extend(_render_source_coverage(report))
     # Close EVIDENCE FOR SYNTHESIS envelope before anything that passes through verbatim.
@@ -766,6 +783,7 @@ def _render_entity_evidence_block(
         report.ranked_candidates,
         limit=fun_params["limit"],
         threshold=fun_params["threshold"],
+        vote_weight=fun_params.get("vote_weight", 18.0),
     )
     if best_takes:
         out.extend(best_takes)
@@ -856,7 +874,13 @@ def render_full(report: schema.Report) -> str:
             lines.extend(_render_candidate(candidate, prefix=f"{rep_index}."))
         lines.append("")
 
-    best_takes = _render_best_takes(report.ranked_candidates)
+    fun_params = _FUN_LEVELS["medium"]
+    best_takes = _render_best_takes(
+        report.ranked_candidates,
+        limit=fun_params["limit"],
+        threshold=fun_params["threshold"],
+        vote_weight=fun_params["vote_weight"],
+    )
     if best_takes:
         lines.extend(best_takes)
         lines.append("")
@@ -1171,6 +1195,12 @@ def _render_candidate(candidate: schema.Candidate, prefix: str) -> list[str]:
     ]
     if candidate.fun_score is not None and candidate.fun_score >= 50:
         detail_parts.append(f"fun:{candidate.fun_score:.0f}")
+    # First-party interaction tag: this is the subject's own post directed at
+    # another account (a reply/mention). Signals a relationship the synthesis
+    # should read even at low engagement, not noise.
+    interaction_targets = (candidate.metadata or {}).get("interaction_targets")
+    if interaction_targets:
+        detail_parts.append("interaction:→@" + ",@".join(interaction_targets[:2]))
     details = " | ".join(part for part in detail_parts if part)
     lines = [
         f"{prefix} [{schema.candidate_source_label(candidate)}] {candidate.title}",
@@ -1257,6 +1287,9 @@ def _shorten_polymarket_title(title: str) -> str:
         words = t.split()
         t = " ".join(words[:6])
 
+    # Drop a leading article so the descriptor doesn't read "an Anthropic Claude..."
+    t = re.sub(r"^(?:a|an|the)\s+", "", t, flags=re.I)
+
     return t
 
 
@@ -1288,12 +1321,21 @@ def _polymarket_top_markets(items: list[schema.SourceItem], limit: int = 3) -> l
         if not descriptor:
             continue
 
-        # For binary Yes/No markets (lead_name == "Yes"), the "Yes" is implicit - omit it.
-        # For named outcomes (e.g. "Kanye" in a multi-way market), keep the outcome name.
-        if lead_name.lower() == "yes":
+        # Append the outcome name only when it adds information. It's redundant when
+        # empty, a binary Yes/No proxy, a bare article ("an"/"the"), or already the
+        # leading token of the descriptor — appending it then yields noise like
+        # "...score at: an 19%" or a doubled token.
+        label = (lead_name or "").strip()
+        descriptor_lead = descriptor.split()[0].lower() if descriptor.split() else ""
+        redundant = (
+            not label
+            or label.lower() in ("yes", "no", "a", "an", "the")
+            or label.lower() == descriptor_lead
+        )
+        if redundant:
             summaries.append(f"{descriptor} {pct}")
         else:
-            summaries.append(f"{descriptor}: {lead_name} {pct}")
+            summaries.append(f"{descriptor}: {label} {pct}")
 
     return summaries
 
@@ -1443,7 +1485,7 @@ _FOOTER_SOURCES: list[tuple[str, str, str, str, list[tuple[str, str]]]] = [
     ("hackernews",  "🟡", "HN",           "story",    [("points", "points"), ("comments", "comments")]),
     ("bluesky",     "🦋", "Bluesky",      "post",     [("likes", "likes"), ("reposts", "reposts")]),
     ("truthsocial", "🇺🇸", "Truth Social", "post",     [("likes", "likes"), ("reposts", "reposts")]),
-    ("github",      "🐙", "GitHub",       "item",     [("reactions", "reactions"), ("comments", "comments")]),
+    ("github",      "🐙", "GitHub",       "item",     [("stars", "stars"), ("merged_prs", "merged"), ("reactions", "reactions"), ("comments", "comments")]),
     ("digg",        "⛏️", "Digg",         "cluster",  [("postCount", "posts"), ("uniqueAuthors", "authors")]),
     # Jobs must appear so a scoped --hiring-signals run (jobs-only) still emits
     # the LAW 5 footer; without it the footer was dropped entirely.
@@ -1710,7 +1752,7 @@ ENGAGEMENT_DISPLAY: dict[str, list[tuple[str, str]]] = {
     "bluesky":      [("likes", "likes"), ("reposts", "rt"), ("replies", "re")],
     "truthsocial":  [("likes", "likes"), ("reposts", "rt"), ("replies", "re")],
     "polymarket":   [],
-    "github":       [("reactions", "react"), ("comments", "cmt")],
+    "github":       [("stars", "stars"), ("merged_prs", "merged"), ("reactions", "react"), ("comments", "cmt")],
     "perplexity":   [("citations", "cite")],
     "digg":         [("postCount", "posts"), ("uniqueAuthors", "auth")],
 }
@@ -1878,6 +1920,10 @@ def _comment_attribution(source: str | None, author: str | None) -> str:
     if not author or author in ("[deleted]", "[removed]"):
         return "Comment"
     prefix = _HANDLE_PREFIX.get(source or "", "")
+    # Some sources (YouTube/TikTok) already store the author with a leading '@';
+    # strip it before re-prefixing so we don't emit '@@handle'.
+    if prefix and author.startswith(prefix):
+        author = author[len(prefix):]
     return f"{prefix}{author}" if prefix else author
 
 
@@ -1951,15 +1997,55 @@ def _source_label(source: str) -> str:
 
 
 
-def _render_best_takes(candidates, limit=5, threshold=70.0):
-    gems = sorted(
-        (c for c in candidates if c.fun_score is not None and c.fun_score >= threshold),
-        key=lambda c: -(c.fun_score or 0),
-    )
+def _best_take_relevance_ok(candidate) -> bool:
+    """Exclude off-topic-but-viral candidates from Best Takes.
+
+    The engine demotes candidates that don't match the topic entity by tagging
+    ``entity-miss`` in the explanation and/or zeroing ``final_score`` (e.g. a
+    39k-like Grand Tour comment surfacing in a 'Patagonia brand' run). Those
+    must never reach Best Takes no matter how upvoted their comments are.
+    Plain ``fallback-local-score`` (without entity-miss) is NOT a demotion --
+    it is the default reason when LLM rerank didn't score an item -- so it is
+    not gated here.
+    """
+    explanation = (candidate.explanation or "").lower()
+    if "entity-miss" in explanation:
+        return False
+    if (candidate.final_score or 0.0) <= 0.0:
+        return False
+    return True
+
+
+def _effective_fun_score(candidate, vote_weight: float) -> float:
+    """LLM humor score plus a bounded, relevance-confidence-scaled crowd nudge.
+
+    ``fun_score`` (the LLM's funniness judgment) dominates; the vote term only
+    amplifies. The nudge is ``vote_weight x relevance_confidence x vote_signal``
+    where vote_signal is per-platform-normalized [0,1] and confidence is the
+    candidate's local relevance [0,1] -- so an unmistakably on-topic, highly
+    upvoted, genuinely funny line gets the full lift, an ambiguous match gets
+    little, and an off-topic one is already excluded upstream.
+    """
+    base = candidate.fun_score or 0.0
+    confidence = max(0.0, min(1.0, candidate.local_relevance or 0.0))
+    vote_signal = signals.top_comment_vote_signal(candidate)
+    return base + vote_weight * confidence * vote_signal
+
+
+def _render_best_takes(candidates, limit=5, threshold=70.0, vote_weight=_FUN_LEVELS["medium"]["vote_weight"]):
+    eligible = [
+        c for c in candidates
+        if c.fun_score is not None
+        and c.fun_score >= _BEST_TAKE_FUNNY_FLOOR
+        and _best_take_relevance_ok(c)
+    ]
+    scored = [(c, _effective_fun_score(c, vote_weight)) for c in eligible]
+    # Carry the effective score forward so the display loop doesn't recompute it.
+    gems = [(c, eff) for c, eff in sorted(scored, key=lambda pair: -pair[1]) if eff >= threshold]
     if len(gems) < 2:
         return []
     lines = ["## Best Takes", ""]
-    for candidate in gems[:limit]:
+    for candidate, effective in gems[:limit]:
         text = candidate.title.strip()
         for item in candidate.source_items:
             for comment in item.metadata.get("top_comments", [])[:3]:
@@ -1973,9 +2059,59 @@ def _render_best_takes(candidates, limit=5, threshold=70.0):
         if author and candidate.source == "reddit":
             container = candidate.source_items[0].container if candidate.source_items else None
             attribution = f"r/{container} comment" if container else "Reddit"
-        score_tag = f"(fun:{candidate.fun_score:.0f})"
+        # fun: is the LLM humor score; flag when crowd votes materially lifted
+        # this item's ranking, so a lower-fun item ranking above a higher-fun one
+        # reads correctly (it was crowd-boosted, not mis-ordered).
+        crowd_boost = effective - (candidate.fun_score or 0.0)
+        crowd_tag = " +crowd" if crowd_boost >= 5.0 else ""
+        score_tag = f"(fun:{candidate.fun_score:.0f}{crowd_tag})"
         reason = f" -- {candidate.fun_explanation}" if candidate.fun_explanation and candidate.fun_explanation != "heuristic-fallback" else ""
         lines.append(f'- "{_truncate(text, 280)}" -- {attribution} {score_tag}{reason}')
+    return lines
+
+
+def _render_top_comments(report, limit: int = 8) -> list[str]:
+    """Vote-ranked community comments across ALL ranked candidates — not just the
+    top-cluster representatives — surfaced into the EVIDENCE block so the reading
+    model can weave the funniest/highest-engagement lines into the synthesis.
+
+    This exists because `_render_best_takes` only populates when the engine has an
+    LLM fun-scorer (a paid provider the subprocess usually lacks), so in normal
+    use the funniest comments never reach the model. This block always surfaces
+    the crowd-voted comments and leaves the funny/quotable SELECTION to the model
+    (a capable fun judge). Ranking is per-platform-normalized so one platform
+    can't crowd out the rest; each line carries the verbatim comment/post URL so
+    the model can cite without reconstructing a link.
+    """
+    seen: set[str] = set()
+    scored: list[tuple[float, schema.Candidate, schema.SourceItem, dict, str]] = []
+    for cand in report.ranked_candidates:
+        for item in cand.source_items:
+            # _top_comments_list applies the per-source min-score threshold and
+            # the 3-per-item cap, so trivial comments don't surface here either.
+            for tc in _top_comments_list(item):
+                if not isinstance(tc, dict):
+                    continue
+                body = (tc.get("excerpt") or tc.get("text") or tc.get("body") or "").strip()
+                if len(body) < 12:
+                    continue
+                key = body[:60].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                strength = signals.normalized_comment_vote(cand.source, tc.get("score"))
+                scored.append((strength, cand, item, tc, body))
+    if len(scored) < 2:
+        return []
+    scored.sort(key=lambda row: -row[0])
+    lines = ["## Top Community Comments", ""]
+    for _strength, cand, _item, tc, body in scored[:limit]:
+        score = tc.get("score", "")
+        vote_label = _vote_label_for(cand.source)
+        attribution = _comment_attribution(cand.source, tc.get("author"))
+        url = tc.get("url") or cand.url or ""
+        url_part = f" — {url}" if url else ""
+        lines.append(f'- "{_truncate(body, 240)}" — {attribution} ({score} {vote_label}){url_part}')
     return lines
 
 

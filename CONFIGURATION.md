@@ -82,7 +82,7 @@ The project-scoped file is useful for **intentional per-client setups**: drop a 
 
 | Source | Key(s) | Required for | Free tier |
 |---|---|---|---|
-| Reddit (public) | none | always on | yes |
+| Reddit (public) | none (default); `SCRAPECREATORS_API_KEY` + `LAST30DAYS_REDDIT_BACKEND=scrapecreators` to pin SC primary with public fallback | always on; SC pin requires `SCRAPECREATORS_API_KEY` | yes |
 | Hacker News | none | always on | yes |
 | Polymarket | none | always on | yes |
 | GitHub | `gh` CLI installed (uses your GitHub auth) | always on if `gh` present | yes |
@@ -186,6 +186,13 @@ to disk, never logged). Both are **lowest-priority and additive** — an explici
 sources, so a box that merely has `pass` installed pays no decrypt cost when
 everything is already in `.env`.
 
+Effective credential priority is: process env > trusted project config
+(`.claude/last30days.env`) > global config (`~/.config/last30days/.env`) >
+macOS Keychain > `pass`(1). The SessionStart status hook also checks for
+Keychain item **presence** under `last30days-<KEY>` without reading secret
+values, so a Keychain-only setup is treated as configured instead of showing the
+first-run welcome again.
+
 | Platform | Source | Store keys with | Lookup convention |
 |---|---|---|---|
 | macOS | Keychain | `scripts/setup-keychain.sh` | service name `last30days-<KEY>` |
@@ -210,6 +217,35 @@ export LAST30DAYS_PASS_PREFIX="secrets/last30days/"   # default: last30days/
 ```
 
 Both sources cover the same key set as the `.env` skeleton above.
+
+#### Reusing existing macOS Keychain items
+
+If you already have keys stored under another Keychain naming convention, you
+can reference them without copying the secret by setting non-secret alias
+metadata in `LAST30DAYS_KEYCHAIN_ALIASES`. The loader still checks
+`last30days-<KEY>` first; aliases are fallback lookups only.
+
+```bash
+# ~/.config/last30days/.env
+LAST30DAYS_KEYCHAIN_ALIASES={"XAI_API_KEY":{"account":"keychain-user","service":"existing-xai-api-key"},"BRAVE_API_KEY":"existing-brave-api-key"}
+```
+
+Each JSON key must be one of the supported env-var names (`XAI_API_KEY`,
+`SCRAPECREATORS_API_KEY`, `BRAVE_API_KEY`, etc). A string value means "use this
+service name with the current user account"; an object can specify both
+`account` and `service`. Lists are allowed for fallback order:
+
+```bash
+LAST30DAYS_KEYCHAIN_ALIASES={"XAI_API_KEY":[{"account":"keychain-user","service":"existing-xai-api-key"},{"service":"last-resort-xai"}]}
+```
+
+The alias value contains no secret material; it is safe to keep in `.env` as
+configuration. The secret itself remains in its original Keychain item and is
+read directly by the engine process.
+
+Write `LAST30DAYS_KEYCHAIN_ALIASES` as a single-line JSON value in `.env`.
+Multiline JSON formatting is not supported because `.env` files are parsed
+line-by-line.
 
 ### Bluesky app-password format and search host
 

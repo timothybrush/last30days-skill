@@ -49,6 +49,8 @@ The engine's `.env` reader doesn't expand `$HOME` — only the tilde, via `Path(
 
 The footer line `📎 Raw results saved to ${LAST30DAYS_MEMORY_DIR:-$HOME/Documents/Last30Days}/<slug>-raw.md` is the canonical pointer; if it shows backslashes on Windows update past v3.1.1.
 
+HTML follow-up renders also write a structured `last-report.json` cache beside `last-run.json` so `--emit=html --synthesis-file` can reuse the report metadata/footer without fetching sources again. Reuse is intentionally short-lived: `LAST30DAYS_REPORT_CACHE_TTL_SECONDS` defaults to `3600` (one hour). Set it to another integer number of seconds to tune the window, or `0` to disable report-cache reuse.
+
 ---
 
 ## First-run onboarding

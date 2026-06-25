@@ -9,6 +9,7 @@ import last30days as cli
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGURATION = ROOT / "CONFIGURATION.md"
 SKILL_MD = ROOT / "skills" / "last30days" / "SKILL.md"
+HTML_REFERENCE = ROOT / "skills" / "last30days" / "references" / "save-html-brief.md"
 
 
 def _parser_flags() -> set[str]:
@@ -52,6 +53,22 @@ def test_agent_is_documented_as_skill_argument_not_python_flag():
     assert "If `--agent` appears in ARGUMENTS" in agent_section
     assert "slash-command skill contract" in text
     assert "not a Python CLI flag" in text
+
+
+def test_html_reference_documents_structured_cache_reuse():
+    text = HTML_REFERENCE.read_text(encoding="utf-8")
+    assert "~/.config/last30days/last-report.json" in text
+    assert "without re-running source fetchers" in text
+    assert "No matching cached report data" in text
+    assert "LAST30DAYS_REPORT_CACHE_TTL_SECONDS" in text
+    assert "default: one hour" in text
+
+
+def test_configuration_documents_report_cache_ttl():
+    text = CONFIGURATION.read_text(encoding="utf-8")
+    assert "LAST30DAYS_REPORT_CACHE_TTL_SECONDS" in text
+    assert "defaults to `3600`" in text
+    assert "`0` to disable report-cache reuse" in text
 
 
 def test_comparison_artifact_contract_documents_actual_paths():

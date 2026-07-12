@@ -7,9 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-07-12
+
 ### Added
 
+- Typed per-run source outcomes: every run records what actually happened per source (`ok`, `no-results`, `partial`, `rate-limited`, `auth-failed`, `unreachable`, `timeout`, `schema-drift`, `skipped-unconfigured`, `error`) in `source_status`, with doctor-aligned states and fix hints - silence is never mistaken for coverage. ([#797](https://github.com/mvanhorn/last30days-skill/pull/797))
+- Versioned agent JSON export profile: `--emit=json --json-profile=agent` returns a stable machine contract (`schema_version` 1.2) with `source_status`, clusters, ranked results with joinable `candidate_id`, and freshness verdicts; `--json-profile=raw` keeps the legacy dump byte-identical. ([#798](https://github.com/mvanhorn/last30days-skill/pull/798), [#810](https://github.com/mvanhorn/last30days-skill/pull/810))
+- Research-quality eval harness: recorded-fixture regression suite scoring runs on citation grounding, recency compliance, cluster coherence, coverage, and determinism against per-fixture floors, in CI. ([#799](https://github.com/mvanhorn/last30days-skill/pull/799))
+- `--drill`: re-research one cluster of the cached report in depth without a full re-run. ([#800](https://github.com/mvanhorn/last30days-skill/pull/800))
+- `--discover`: topic-less trending sweeps over listing feeds with velocity-ranked story clusters and ready-to-run research commands. ([#801](https://github.com/mvanhorn/last30days-skill/pull/801))
+- `library feed`: renders every saved brief into a browsable HTML library with a topic-grouped index and a subscribable Atom feed; hand-written pages are preserved with backups. ([#802](https://github.com/mvanhorn/last30days-skill/pull/802))
+- `library search`: SQLite FTS5 full-text search across saved briefs and store sightings, plus a passive "From your library" section when new runs overlap past research; scoped `--save-dir` libraries stay fully isolated from the shared store. ([#803](https://github.com/mvanhorn/last30days-skill/pull/803))
+- `--register` audience templates: `exec`, `dev`, and `creator` presets reshape section order and budgets for the reader; `eli5` is unified into the same mechanism. ([#804](https://github.com/mvanhorn/last30days-skill/pull/804))
+- `--verify-freshness`: typed per-claim act-time verdicts (`current` / `stale` / `contradicted` / `unsupported`) with point re-fetch of Polymarket lines, GitHub stars, and StockTwits sentiment, inline or post-hoc over the cached report; closes the recency-promise audit gap. ([#805](https://github.com/mvanhorn/last30days-skill/pull/805), closes [#769](https://github.com/mvanhorn/last30days-skill/issues/769))
+- `--corpus`: register local directories as a private, offline, deterministic source; matching notes rank alongside social evidence under a LOCAL ONLY badge and are excluded from hosted publishing and agent JSON by default. ([#808](https://github.com/mvanhorn/last30days-skill/pull/808))
 - Native Grok Build (xAI) plugin and marketplace lane: `.grok-plugin/plugin.json` + `.grok-plugin/marketplace.json` so `grok plugin install mvanhorn/last30days-skill` and `grok plugin marketplace add mvanhorn/last30days-skill` work as first-class install paths. The self-hosted catalog uses a bare Git URL source (tracks HEAD); submitting to the official `xai-org/plugin-marketplace` remains a post-merge SHA-pinned outbound PR documented in `AGENTS.md`.
+
+### Fixed
+
+- Session-start hook no longer deadlocks under Homebrew bash 5.3: removed every heredoc from `check-config.sh` (bash 5.3 can block forever in `heredoc_write` inside command substitution). ([#809](https://github.com/mvanhorn/last30days-skill/pull/809))
+- Trustpilot transient-error retries keep their domain parameters. ([#794](https://github.com/mvanhorn/last30days-skill/pull/794))
+- Hosted same-day saves no longer overwrite earlier reports, and `save_output` never silently overwrites date-stamped files. ([#784](https://github.com/mvanhorn/last30days-skill/pull/784), [#785](https://github.com/mvanhorn/last30days-skill/pull/785))
+- `.env` reads as UTF-8 (with BOM tolerance and locale fallback) on Windows. ([#780](https://github.com/mvanhorn/last30days-skill/pull/780), [#715](https://github.com/mvanhorn/last30days-skill/pull/715))
+- `FUN_LEVEL` and `LAST30DAYS_REPORT_CACHE_TTL_SECONDS` are registered in `env.py` so `.env` values are no longer silently ignored; doctor detects `GITHUB_TOKEN` from the process environment. ([#708](https://github.com/mvanhorn/last30days-skill/pull/708), [#732](https://github.com/mvanhorn/last30days-skill/pull/732), [#782](https://github.com/mvanhorn/last30days-skill/pull/782))
+- File descriptors close promptly across the engine (`open()` wrapped in `with`). ([#775](https://github.com/mvanhorn/last30days-skill/pull/775))
 
 ## [3.11.0] - 2026-07-05
 

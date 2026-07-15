@@ -875,5 +875,62 @@ class FourStateAudit(unittest.TestCase):
         self.assertIn("13 items last run", text)
 
 
+class CliHealth(unittest.TestCase):
+    """U3: CLI-dependency health + techmeme/arxiv/trustpilot sources."""
+
+    def test_new_cli_sources_present(self):
+        report = _build(
+            {},
+            probe_map={
+                "techmeme-pp-cli": health.OK,
+                "arxiv-pp-cli": health.OK,
+                "trustpilot-pp-cli": health.OK,
+            },
+        )
+        for src in ("techmeme", "arxiv", "trustpilot"):
+            self.assertIn(src, report["sources"], src)
+            self.assertEqual("ok", report["sources"][src]["cli"]["status"], src)
+
+    def test_cli_marker_and_block_for_ytdlp(self):
+        report = _build({}, probe_map={"yt-dlp": health.OK})
+        self.assertEqual("ok", report["sources"]["youtube"]["cli"]["status"])
+        text = doctor.render_text(report)
+        self.assertIn("CLI health", text)
+        self.assertIn("[CLI: yt-dlp ✓]", text)
+
+    def test_keyless_source_has_no_cli(self):
+        report = _build({})
+        self.assertNotIn("cli", report["sources"]["polymarket"])
+        self.assertIn("need no CLI", doctor.render_text(report))
+
+    def test_digg_off_path_is_not_working(self):
+        def fake(name, timeout=health.PROBE_TIMEOUT):
+            if name == "digg-pp-cli":
+                return health.DependencyProbe(
+                    name=name,
+                    status=health.BROKEN,
+                    detail="installed off PATH",
+                    off_path=True,
+                    prescription="add ~/.local/bin to PATH",
+                )
+            return health.DependencyProbe(
+                name=name, status=health.MISSING, detail="missing",
+                prescription="install",
+            )
+
+        with _Hermetic(), mock.patch("lib.health.probe_dependency", fake):
+            report = doctor.build_report({})
+        self.assertTrue(report["sources"]["digg"]["cli"]["off_path"])
+        self.assertEqual(
+            doctor.AUDIT_NOT_WORKING, report["sources"]["digg"]["audit_state"]
+        )
+
+    def test_gh_absent_github_still_working(self):
+        report = _build({})  # gh missing by default in _Hermetic
+        gh = report["sources"]["github"]
+        self.assertEqual(doctor.AUDIT_WORKING, gh["audit_state"])
+        self.assertTrue(gh["cli"]["optional"])
+
+
 if __name__ == "__main__":
     unittest.main()

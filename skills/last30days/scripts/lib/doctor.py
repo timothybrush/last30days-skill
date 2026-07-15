@@ -157,6 +157,9 @@ SOURCE_ORDER = (
     "polymarket",
     "github",
     "digg",
+    "techmeme",
+    "arxiv",
+    "trustpilot",
     "tiktok",
     "instagram",
     "threads",
@@ -169,6 +172,21 @@ SOURCE_ORDER = (
     "jobs",
     "library",
 )
+
+# Sources whose availability depends on a downloaded CLI binary. doctor probes
+# each (installed AND functional, via health.probe_dependency) and surfaces a
+# per-source marker plus a dedicated CLI-health block (R2). Everything not
+# listed is keyless - it needs no CLI. gh is OPTIONAL for GitHub (the REST tier
+# works without it), so its absence is a note, never a failure.
+CLI_DEPENDENCIES = {
+    "youtube": "yt-dlp",
+    "digg": "digg-pp-cli",
+    "techmeme": "techmeme-pp-cli",
+    "arxiv": "arxiv-pp-cli",
+    "trustpilot": "trustpilot-pp-cli",
+    "github": "gh",
+}
+_OPTIONAL_CLI_SOURCES = frozenset({"github"})
 
 # Key-presence booleans for the setup block. NEVER values.
 KEY_PRESENCE_VARS = (
@@ -472,6 +490,36 @@ def _digg_record(config):
     return _record(status=probe.status, fix=fix, detail=probe.detail, requires=requires)
 
 
+def _cli_gated_record(config, cli_name: str, purpose: str):
+    """A source gated purely on a keyless downloaded CLI (mirrors _digg_record).
+
+    ok -> installed and functional; opt-in -> never installed (an optional
+    source simply not enabled); its failing status -> installed off-PATH,
+    broken, or timing out (configured-but-broken).
+    """
+    probe = health.probe_dependency(cli_name)
+    requires = f"{cli_name} on the agent-subprocess PATH"
+    if probe.ok:
+        return _record(status=health.OK, detail=probe.detail, requires=requires)
+    entry = prescriptions.for_dependency_probe(probe)
+    fix = _fix_text(entry) if entry else probe.prescription
+    if probe.status == health.MISSING and not probe.off_path:
+        return _record(status="opt-in", fix=fix, detail=probe.detail, requires=requires)
+    return _record(status=probe.status, fix=fix, detail=probe.detail, requires=requires)
+
+
+def _techmeme_record(config):
+    return _cli_gated_record(config, "techmeme-pp-cli", "techmeme")
+
+
+def _arxiv_record(config):
+    return _cli_gated_record(config, "arxiv-pp-cli", "arxiv")
+
+
+def _trustpilot_record(config):
+    return _cli_gated_record(config, "trustpilot-pp-cli", "trustpilot")
+
+
 def _tiktok_record(config):
     return _sc_gated_record(config, "tiktok")
 
@@ -643,6 +691,9 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "polymarket": _polymarket_record,
     "github": _github_record,
     "digg": _digg_record,
+    "techmeme": _techmeme_record,
+    "arxiv": _arxiv_record,
+    "trustpilot": _trustpilot_record,
     "tiktok": _tiktok_record,
     "instagram": _instagram_record,
     "threads": _threads_record,
@@ -814,6 +865,24 @@ def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
         record["run_outcome"] = evidence["outcomes"].get(source) if evidence["fresh"] else None
         record["audit_state"] = audit_state(source, record, record["run_outcome"])
 
+    # U3: annotate each CLI-dependent source with its binary's health so the
+    # per-source marker and the dedicated CLI-health block can render (R2).
+    for source, cli_name in CLI_DEPENDENCIES.items():
+        record = sources.get(source)
+        if record is None:
+            continue
+        try:
+            probe = health.probe_dependency(cli_name)
+        except Exception:
+            continue
+        record["cli"] = {
+            "name": cli_name,
+            "status": probe.status,
+            "off_path": bool(getattr(probe, "off_path", False)),
+            "detail": probe.detail,
+            "optional": source in _OPTIONAL_CLI_SOURCES,
+        }
+
     # Sequential on purpose: the permission preflight composes pipeline
     # diagnostics and must not race the source builders.
     try:
@@ -915,8 +984,32 @@ def _sub_lane_lines(record: Dict[str, Any]) -> List[str]:
 
 
 def _cli_health_lines(report: Dict[str, Any]) -> List[str]:
-    """Dedicated CLI-health block (populated by U3)."""
-    return []
+    """Dedicated CLI-health block (R2): one row per CLI-dependent source,
+    plus a note naming the keyless sources that need no CLI at all.
+    """
+    sources = report.get("sources") or {}
+    rows: List[str] = []
+    for source in SOURCE_ORDER:
+        cli = (sources.get(source) or {}).get("cli")
+        if not cli:
+            continue
+        ok = cli.get("status") == health.OK
+        glyph = "✓" if ok else "✗"
+        detail = cli.get("detail") or cli.get("status")
+        tail = ""
+        if not ok:
+            if cli.get("off_path"):
+                tail = " (installed off-PATH)"
+            elif cli.get("optional"):
+                tail = " (optional)"
+        rows.append(f"  {glyph} {cli['name']} — {source}{tail}: {detail}")
+    if not rows:
+        return []
+    return (
+        ["CLI health (downloaded binaries):"]
+        + rows
+        + ["  · Reddit, Hacker News, Polymarket need no CLI (keyless)"]
+    )
 
 
 def render_text(report: Dict[str, Any]) -> str:
